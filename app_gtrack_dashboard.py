@@ -260,7 +260,7 @@ with cp:
     st.plotly_chart(fig_pie, use_container_width=True)
 
 with cb:
-    st.markdown("##### Top 10 Fleet — GPRS Lost")
+    st.markdown("##### Top 10 Fleet No Update")
     top_lost = (df[df["Vehicle Status"] == "GPRS Lost"]
                 .groupby("Fleet Group").size().sort_values(ascending=False).head(10))
     if not top_lost.empty:
