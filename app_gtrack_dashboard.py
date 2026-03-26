@@ -17,8 +17,7 @@ st.set_page_config(
 )
 
 DB_PATH = "breakdown_status.db"
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs("uploads", exist_ok=True)
 
 # ── SQLite ─────────────────────────────────────────────────────────────────────
 def get_conn():
@@ -72,70 +71,84 @@ def load_excel(file_bytes):
     return df
 
 # ── Session state ──────────────────────────────────────────────────────────────
-if "modal_unit" not in st.session_state:
-    st.session_state.modal_unit = None
-if "page_num" not in st.session_state:
-    st.session_state.page_num = 1
+for key, default in [("modal_unit", None), ("page_num", 1)]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 📁 Upload Group Project")
     uploaded = st.file_uploader("Upload file .xlsx", type=["xlsx"])
     st.caption("Upload tiap pagi. Status Breakdown tidak akan terhapus.")
-
     st.divider()
     st.markdown("### 🔍 Filter")
     filter_status = st.selectbox("Status", ["Semua", "Tracking", "Stop", "GPRS Lost", "Breakdown"])
     search_text = st.text_input("Cari kode / unit ID / fleet")
-
     st.divider()
     bd_sidebar = load_breakdown()
     st.metric("Breakdown aktif", len(bd_sidebar))
     if not bd_sidebar.empty:
         if st.button("🗑 Reset semua breakdown", type="secondary"):
-            conn = get_conn()
-            conn.execute("DELETE FROM breakdown")
-            conn.commit()
-            conn.close()
+            c = get_conn(); c.execute("DELETE FROM breakdown"); c.commit(); c.close()
             st.rerun()
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-.big-metric { font-size:2.2rem; font-weight:700; line-height:1; }
-.metric-label { font-size:0.78rem; color:#888; margin-top:2px; }
-.tbl-header {
-    display:flex; align-items:center; padding:7px 10px;
-    background:#f9fafb; border:1px solid #e5e7eb;
-    border-radius:6px 6px 0 0;
-    font-size:11px; font-weight:600; color:#6b7280; gap:8px;
+.big-metric  { font-size:2.2rem; font-weight:700; line-height:1; }
+.metric-label{ font-size:0.78rem; color:#888; margin-top:2px; }
+
+/* Hapus gap default antar st.columns agar baris tabel rapat */
+[data-testid="stHorizontalBlock"] {
+    gap: 0 !important;
+    align-items: center !important;
 }
-.row-info {
-    display:flex; align-items:center; padding:7px 10px;
-    border-left:1px solid #e5e7eb; border-right:1px solid #e5e7eb;
-    border-bottom:1px solid #f3f4f6; gap:8px; flex-wrap:nowrap;
+/* Setiap sel tabel */
+.cell {
+    padding: 6px 8px;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(128,128,128,0.15);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.6;
 }
-.row-info:hover { background:#fafafa; }
-.col-fleet  { flex:2; min-width:110px; font-size:12px; color:#374151; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.col-uid    { flex:1.2; min-width:80px; font-size:11px; color:#9ca3af; font-family:monospace; }
-.col-code   { flex:1.4; min-width:90px; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.col-time   { flex:1.4; min-width:100px; font-size:11px; color:#9ca3af; }
-.col-res    { flex:1.3; min-width:90px; font-size:11px; color:#6b7280; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.col-status { flex:0.9; min-width:75px; }
-.badge-tracking  { background:#d1fae5; color:#065f46; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:500; }
-.badge-stop      { background:#f3f4f6; color:#374151; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:500; }
-.badge-lost      { background:#fee2e2; color:#991b1b; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:500; }
-.badge-breakdown { background:#fef3c7; color:#92400e; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:500; }
-/* Rapatkan jarak antar elemen baris */
-div[data-testid="stHorizontalBlock"] { gap: 0 !important; margin-bottom: 0 !important; }
+.cell-hdr {
+    padding: 6px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #6b7280;
+    border-bottom: 2px solid rgba(128,128,128,0.25);
+    background: rgba(128,128,128,0.05);
+}
+.badge-tracking  { background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-stop      { background:#f3f4f6;color:#374151;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-lost      { background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-breakdown { background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.bd-note { font-size:11px;color:#92400e;background:#fffbeb;padding:3px 10px;border-left:3px solid #fcd34d; }
+
+/* Paksa tombol di kolom terakhir agar vertikal tengah & compact */
+[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
+    [data-testid="stBaseButton-secondary"],
+[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
+    [data-testid="stBaseButton-primary"] {
+    height: 30px !important;
+    padding: 0 10px !important;
+    font-size: 12px !important;
+    margin-top: 2px;
+}
+/* Hilangkan margin bawah tombol agar tidak menambah tinggi baris */
+[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child div[data-testid="element-container"] {
+    margin-bottom: 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ── Header ─────────────────────────────────────────────────────────────────────
-c1, c2 = st.columns([1, 4])
-with c1:
+h1, h2 = st.columns([1, 5])
+with h1:
     st.markdown("<span style='font-size:2rem;font-weight:700;color:#ff6b35'>G<span style='color:#1e3a5f'>track</span></span>", unsafe_allow_html=True)
-with c2:
+with h2:
     st.markdown("**GPS Tracking Dashboard** — Trisatria Persada Borneo")
     st.caption(f"Data diperbarui: {datetime.now().strftime('%d %B %Y %H:%M')}")
 
@@ -172,7 +185,7 @@ for col, label, val, color in [
 ]:
     with col:
         st.markdown(f"""
-        <div style='padding:12px 16px;border-radius:8px;border:1px solid #e5e7eb'>
+        <div style='padding:12px 16px;border-radius:8px;border:1px solid rgba(128,128,128,0.2)'>
           <div class='big-metric' style='color:{color}'>{val}</div>
           <div class='metric-label'>{label}</div>
         </div>""", unsafe_allow_html=True)
@@ -208,7 +221,7 @@ with cb:
                                yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig_bar, use_container_width=True)
 
-# ── Filter ─────────────────────────────────────────────────────────────────────
+# ── Filter & pagination ────────────────────────────────────────────────────────
 fdf = df.copy()
 if filter_status != "Semua":
     fdf = fdf[fdf["_display_status"] == filter_status]
@@ -221,8 +234,7 @@ if search_text:
     ]
 fdf = fdf.reset_index(drop=True)
 
-# ── Pagination ──────────────────────────────────────────────────────────────────
-PER_PAGE    = 20
+PER_PAGE    = 25
 total_rows  = len(fdf)
 total_pages = max(1, (total_rows + PER_PAGE - 1) // PER_PAGE)
 if st.session_state.page_num > total_pages:
@@ -231,25 +243,28 @@ if st.session_state.page_num > total_pages:
 st.divider()
 st.markdown(f"#### Daftar Unit &nbsp;<span style='font-size:13px;color:#9ca3af'>{total_rows} unit ditampilkan</span>", unsafe_allow_html=True)
 
-# ── Modal breakdown ─────────────────────────────────────────────────────────────
+# ── Modal breakdown (muncul di atas tabel) ─────────────────────────────────────
 if st.session_state.modal_unit is not None:
-    mu       = st.session_state.modal_unit
+    mu        = st.session_state.modal_unit
     is_active = mu["unit_id"] in bd_ids
-    bd_row   = bd_df[bd_df["unit_id"] == mu["unit_id"]]
+    bd_row    = bd_df[bd_df["unit_id"] == mu["unit_id"]]
 
     with st.container(border=True):
-        st.markdown(f"**{'✏ Edit' if is_active else '⚠ Tandai'} Breakdown** — "
-                    f"`{mu['code']}` &nbsp;·&nbsp; {mu['fleet']}")
+        st.markdown(
+            f"**{'✏ Edit' if is_active else '⚠ Tandai'} Breakdown** — "
+            f"`{mu['code']}` &nbsp;·&nbsp; {mu['fleet']}"
+        )
         mc1, mc2 = st.columns(2)
         with mc1:
-            default_tek = bd_row.iloc[0]["teknisi"] if is_active and not bd_row.empty else ""
-            inp_tek = st.text_input("Nama Teknisi / Koordinator", value=default_tek, key="inp_tek")
+            inp_tek = st.text_input("Nama Teknisi / Koordinator",
+                value=bd_row.iloc[0]["teknisi"] if is_active and not bd_row.empty else "",
+                key="inp_tek")
         with mc2:
-            default_cat = bd_row.iloc[0]["catatan"] if is_active and not bd_row.empty else ""
-            inp_cat = st.text_input("Catatan", value=default_cat, key="inp_cat",
-                                    placeholder="cth: kabel antena putus")
+            inp_cat = st.text_input("Catatan",
+                value=bd_row.iloc[0]["catatan"] if is_active and not bd_row.empty else "",
+                placeholder="cth: kabel antena putus", key="inp_cat")
 
-        bc1, bc2, bc3, _ = st.columns([1, 1, 1, 4])
+        bc1, bc2, bc3, _ = st.columns([1, 1, 1.5, 4])
         with bc1:
             if st.button("💾 Simpan", type="primary", key="btn_simpan"):
                 save_breakdown(mu["unit_id"], mu["fleet"], mu["code"], inp_cat, inp_tek)
@@ -261,25 +276,20 @@ if st.session_state.modal_unit is not None:
                 st.rerun()
         if is_active:
             with bc3:
-                if st.button("🗑 Hapus Status", key="btn_hapus"):
+                if st.button("🗑 Hapus Status Breakdown", key="btn_hapus"):
                     delete_breakdown(mu["unit_id"])
                     st.session_state.modal_unit = None
                     st.rerun()
 
-# ── Tabel header ───────────────────────────────────────────────────────────────
-st.markdown("""
-<div class='tbl-header'>
-  <div style='flex:2;min-width:110px'>Fleet Group</div>
-  <div style='flex:1.2;min-width:80px'>Unit ID</div>
-  <div style='flex:1.4;min-width:90px'>Vehicle Code</div>
-  <div style='flex:1.4;min-width:100px'>Local Time</div>
-  <div style='flex:1.3;min-width:90px'>Resource</div>
-  <div style='flex:0.9;min-width:75px'>Status</div>
-  <div style='flex:0.9;min-width:100px'>Aksi</div>
-</div>
-""", unsafe_allow_html=True)
+# ── Kolom lebar (proporsi) ─────────────────────────────────────────────────────
+# Fleet(3) | UnitID(2) | Code(2) | Time(2) | Resource(2) | Status(1.5) | Aksi(1.5)
+COL_W = [3, 2, 2, 2, 2, 1.5, 1.5]
 
-# ── Render baris tabel ─────────────────────────────────────────────────────────
+# Header tabel
+hcols = st.columns(COL_W)
+for hc, label in zip(hcols, ["Fleet Group", "Unit ID", "Vehicle Code", "Local Time", "Resource", "Status", "Aksi"]):
+    hc.markdown(f"<div class='cell-hdr'>{label}</div>", unsafe_allow_html=True)
+
 BADGE = {
     "Tracking":  "badge-tracking",
     "Stop":      "badge-stop",
@@ -287,8 +297,9 @@ BADGE = {
     "Breakdown": "badge-breakdown",
 }
 
-start    = (st.session_state.page_num - 1) * PER_PAGE
-page_df  = fdf.iloc[start : start + PER_PAGE]
+# ── Render baris ───────────────────────────────────────────────────────────────
+start   = (st.session_state.page_num - 1) * PER_PAGE
+page_df = fdf.iloc[start : start + PER_PAGE]
 
 for idx, row in page_df.iterrows():
     uid    = str(row["Unit ID"])
@@ -299,42 +310,37 @@ for idx, row in page_df.iterrows():
     status = str(row["_display_status"])
     is_bd  = bool(row["_breakdown"])
     badge  = BADGE.get(status, "badge-stop")
-    bd_info = bd_df[bd_df["unit_id"] == uid]
 
-    # Info kolom pakai HTML
-    st.markdown(f"""
-    <div class='row-info'>
-      <div class='col-fleet' title='{fleet}'>{fleet}</div>
-      <div class='col-uid'>{uid}</div>
-      <div class='col-code' title='{code}'>{code}</div>
-      <div class='col-time'>{ttime}</div>
-      <div class='col-res' title='{res}'>{res}</div>
-      <div class='col-status'><span class='{badge}'>{status}</span></div>
-      <div style='flex:0.9;min-width:100px'></div>
-    </div>
-    """, unsafe_allow_html=True)
+    rcols = st.columns(COL_W)
+    rcols[0].markdown(f"<div class='cell' title='{fleet}'>{fleet}</div>",       unsafe_allow_html=True)
+    rcols[1].markdown(f"<div class='cell' style='font-family:monospace;font-size:11px'>{uid}</div>", unsafe_allow_html=True)
+    rcols[2].markdown(f"<div class='cell' title='{code}'>{code}</div>",         unsafe_allow_html=True)
+    rcols[3].markdown(f"<div class='cell'>{ttime}</div>",                        unsafe_allow_html=True)
+    rcols[4].markdown(f"<div class='cell' title='{res}'>{res}</div>",            unsafe_allow_html=True)
+    rcols[5].markdown(f"<div class='cell'><span class='{badge}'>{status}</span></div>", unsafe_allow_html=True)
 
-    # Tombol Streamlit — menumpuk di bawah baris, di kolom kanan
-    _, btn_area = st.columns([8.5, 1.5])
-    with btn_area:
-        label = "⚠ Edit BD" if is_bd else "+ Breakdown"
-        btn_type = "primary" if is_bd else "secondary"
-        if st.button(label, key=f"bd_{uid}_{idx}", type=btn_type, use_container_width=True):
-            st.session_state.modal_unit = {"unit_id": uid, "fleet": fleet, "code": code}
-            st.rerun()
+    # Tombol di kolom terakhir — sejajar dengan baris
+    with rcols[6]:
+        if is_bd:
+            if st.button("⚠ Edit BD", key=f"bd_{uid}_{idx}", type="primary", use_container_width=True):
+                st.session_state.modal_unit = {"unit_id": uid, "fleet": fleet, "code": code}
+                st.rerun()
+        else:
+            if st.button("+ Breakdown", key=f"bd_{uid}_{idx}", use_container_width=True):
+                st.session_state.modal_unit = {"unit_id": uid, "fleet": fleet, "code": code}
+                st.rerun()
 
-    # Tampilkan catatan di bawah baris jika breakdown aktif
-    if is_bd and not bd_info.empty:
-        bdi = bd_info.iloc[0]
-        note_text = f"📝 {bdi['catatan']}" if bdi['catatan'] else ""
-        tech_text = f"👤 {bdi['teknisi']}" if bdi['teknisi'] else ""
-        if note_text or tech_text:
-            st.markdown(
-                f"<div style='font-size:11px;color:#92400e;background:#fffbeb;"
-                f"padding:3px 10px;border-left:3px solid #fcd34d;margin-bottom:2px'>"
-                f"{note_text} &nbsp; {tech_text}</div>",
-                unsafe_allow_html=True
-            )
+    # Catatan breakdown (muncul di baris ekstra di bawah jika aktif)
+    if is_bd:
+        bd_info = bd_df[bd_df["unit_id"] == uid]
+        if not bd_info.empty:
+            bdi = bd_info.iloc[0]
+            parts = []
+            if bdi["catatan"]: parts.append(f"📝 {bdi['catatan']}")
+            if bdi["teknisi"]:  parts.append(f"👤 {bdi['teknisi']}")
+            if parts:
+                st.markdown(f"<div class='bd-note'>{' &nbsp;·&nbsp; '.join(parts)}</div>",
+                            unsafe_allow_html=True)
 
 # ── Pagination ─────────────────────────────────────────────────────────────────
 st.markdown("")
@@ -348,7 +354,7 @@ with pg2:
         f"<div style='text-align:center;font-size:13px;padding-top:6px'>"
         f"Halaman {st.session_state.page_num} / {total_pages} &nbsp;·&nbsp; "
         f"Baris {start+1}–{min(start+PER_PAGE, total_rows)} dari {total_rows}</div>",
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 with pg3:
     if st.button("Next ▶", disabled=st.session_state.page_num >= total_pages, use_container_width=True):
