@@ -144,7 +144,7 @@ with st.sidebar:
 
     st.divider()
     bd_sidebar = load_breakdown()
-    st.metric("Breakdown aktif", len(bd_sidebar))
+    st.metric("Breakdown", len(bd_sidebar))
     if not bd_sidebar.empty:
         if st.button("🗑 Reset semua breakdown", type="secondary"):
             c = get_conn(); c.execute("DELETE FROM breakdown"); c.commit(); c.close()
