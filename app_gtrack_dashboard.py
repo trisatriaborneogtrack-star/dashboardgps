@@ -1,6 +1,6 @@
 """
 GPS Tracking Dashboard - Trisatria Persada Borneo
-Multi-koordinator | Google Drive + Manual Upload | SQLite Breakdown
+Streamlit + SQLite | Upload per session | Breakdown persisten
 """
 
 import streamlit as st
@@ -8,8 +8,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import sqlite3
 import os
-import io
-import json
 from datetime import datetime
 
 st.set_page_config(
@@ -19,77 +17,6 @@ st.set_page_config(
 )
 
 DB_PATH = "breakdown_status.db"
-
-# ── Cek apakah Google Drive tersedia ──────────────────────────────────────────
-def gdrive_available():
-    try:
-        from googleapiclient.discovery import build
-        from google.oauth2 import service_account
-        creds_raw = st.secrets.get("GDRIVE_CREDENTIALS", None)
-        folder_id = st.secrets.get("GDRIVE_FOLDER_ID", None)
-        return bool(creds_raw and folder_id)
-    except Exception:
-        return False
-
-# ── Google Drive: baca semua .xlsx dari folder ────────────────────────────────
-@st.cache_data(ttl=300)  # cache 5 menit, refresh otomatis
-def load_from_gdrive():
-    from googleapiclient.discovery import build
-    from google.oauth2 import service_account
-    import googleapiclient.http
-
-    creds_raw  = st.secrets["GDRIVE_CREDENTIALS"]
-    folder_id  = st.secrets["GDRIVE_FOLDER_ID"]
-    creds_info = json.loads(creds_raw) if isinstance(creds_raw, str) else dict(creds_raw)
-
-    creds   = service_account.Credentials.from_service_account_info(
-        creds_info,
-        scopes=["https://www.googleapis.com/auth/drive.readonly"]
-    )
-    service = build("drive", "v3", credentials=creds)
-
-    # Cari semua file .xlsx di folder
-    results = service.files().list(
-        q=f"'{folder_id}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false",
-        fields="files(id, name, modifiedTime)",
-        orderBy="modifiedTime desc"
-    ).execute()
-
-    files = results.get("files", [])
-    if not files:
-        return pd.DataFrame(), []
-
-    dfs    = []
-    labels = []
-    for f in files:
-        request  = service.files().get_media(fileId=f["id"])
-        fh       = io.BytesIO()
-        downloader = googleapiclient.http.MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        fh.seek(0)
-        try:
-            df = _parse_excel(fh)
-            df["_source_file"] = f["name"]
-            dfs.append(df)
-            labels.append(f"{f['name']} ({f['modifiedTime'][:10]})")
-        except Exception:
-            pass
-
-    if dfs:
-        return pd.concat(dfs, ignore_index=True), labels
-    return pd.DataFrame(), []
-
-# ── Parse satu file Excel ──────────────────────────────────────────────────────
-def _parse_excel(file_obj):
-    df = pd.read_excel(file_obj)
-    df.columns = df.columns.str.strip()
-    if "Unit ID" in df.columns:
-        df["Unit ID"] = df["Unit ID"].astype(str).str.replace(".0", "", regex=False).str.strip()
-    if "Local Time" in df.columns:
-        df["Local Time"] = pd.to_datetime(df["Local Time"], errors="coerce")
-    return df
 
 # ── SQLite ─────────────────────────────────────────────────────────────────────
 def get_conn():
@@ -133,8 +60,17 @@ def delete_breakdown(unit_id):
     conn.commit()
     conn.close()
 
+# ── Load Excel ─────────────────────────────────────────────────────────────────
+@st.cache_data
+def load_excel(file_bytes):
+    df = pd.read_excel(file_bytes)
+    df.columns = df.columns.str.strip()
+    df["Unit ID"] = df["Unit ID"].astype(str).str.replace(".0", "", regex=False).str.strip()
+    df["Local Time"] = pd.to_datetime(df["Local Time"], errors="coerce")
+    return df
+
 # ── Session state ──────────────────────────────────────────────────────────────
-for k, v in [("modal_unit", None), ("page_num", 1), ("manual_dfs", {})]:
+for k, v in [("modal_unit", None), ("page_num", 1)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -153,7 +89,6 @@ st.markdown("""
 .badge-lost      { background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
 .badge-breakdown { background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
 .bd-note  { font-size:11px;color:#92400e;background:#fffbeb;padding:3px 10px;border-left:3px solid #fcd34d; }
-.src-chip { background:#e0f2fe;color:#0369a1;padding:1px 6px;border-radius:3px;font-size:10px; }
 [data-testid="stHorizontalBlock"] { gap:0 !important; align-items:center !important; }
 [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
     [data-testid="stBaseButton-secondary"],
@@ -165,46 +100,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
-USE_GDRIVE = gdrive_available()
-
 with st.sidebar:
     st.markdown("<span style='font-size:1.6rem;font-weight:700;color:#ff6b35'>G<span style='color:#1e3a5f'>track</span></span>", unsafe_allow_html=True)
     st.caption("Trisatria Persada Borneo")
     st.divider()
 
-    if USE_GDRIVE:
-        st.success("Google Drive terhubung", icon="✅")
-        st.caption("File dibaca otomatis dari folder Drive.")
-        if st.button("🔄 Refresh data Drive", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-    else:
-        st.warning("Mode upload manual", icon="📁")
-        st.caption("Google Drive belum dikonfigurasi. Setiap koordinator upload file fleet-nya di sini.")
-        uploaded_files = st.file_uploader(
-            "Upload file .xlsx (bisa lebih dari satu)",
-            type=["xlsx"],
-            accept_multiple_files=True,
-            help="Setiap koordinator upload file fleet group masing-masing"
-        )
-        if uploaded_files:
-            for uf in uploaded_files:
-                if uf.name not in st.session_state.manual_dfs:
-                    try:
-                        df_tmp = _parse_excel(uf)
-                        df_tmp["_source_file"] = uf.name
-                        st.session_state.manual_dfs[uf.name] = df_tmp
-                    except Exception as e:
-                        st.error(f"Gagal baca {uf.name}: {e}")
-
-        if st.session_state.manual_dfs:
-            st.markdown(f"**{len(st.session_state.manual_dfs)} file dimuat:**")
-            for fname in list(st.session_state.manual_dfs.keys()):
-                col_f, col_x = st.columns([4, 1])
-                col_f.caption(f"📄 {fname}")
-                if col_x.button("✕", key=f"rm_{fname}"):
-                    del st.session_state.manual_dfs[fname]
-                    st.rerun()
+    st.markdown("### 📁 Upload Group Project")
+    uploaded = st.file_uploader("Upload file .xlsx", type=["xlsx"])
+    st.caption("Upload tiap pagi. Status Breakdown tidak akan terhapus.")
 
     st.divider()
     st.markdown("### 🔍 Filter")
@@ -220,57 +123,38 @@ with st.sidebar:
             c = get_conn(); c.execute("DELETE FROM breakdown"); c.commit(); c.close()
             st.rerun()
 
-# ── Ambil data ─────────────────────────────────────────────────────────────────
-source_labels = []
-
-if USE_GDRIVE:
-    with st.spinner("Membaca file dari Google Drive..."):
-        df, source_labels = load_from_gdrive()
-    if df.empty:
-        st.warning("Tidak ada file .xlsx di folder Google Drive. Pastikan koordinator sudah upload.")
-        st.stop()
-else:
-    if not st.session_state.manual_dfs:
-        st.info("⬅ Upload file .xlsx fleet group di sidebar. Setiap koordinator upload file masing-masing.")
-        st.stop()
-    df = pd.concat(list(st.session_state.manual_dfs.values()), ignore_index=True)
-
-# ── Merge breakdown ────────────────────────────────────────────────────────────
-bd_df  = load_breakdown()
-bd_ids = set(bd_df["unit_id"].astype(str).tolist())
-
-df["_breakdown"]      = df["Unit ID"].isin(bd_ids)
-df["_display_status"] = df.apply(
-    lambda r: "Breakdown" if r["_breakdown"] else str(r.get("Vehicle Status", "") or ""), axis=1
-)
-if "_source_file" not in df.columns:
-    df["_source_file"] = "-"
-
-# Hitung selisih hari dari Local Time ke hari ini
-now = pd.Timestamp.now()
-df["_days_no_update"] = df["Local Time"].apply(
-    lambda t: int((now - t).days) if pd.notna(t) else None
-)
-
-# Urutkan dari Local Time terlama (terbesar selisih harinya) ke terbaru
-df = df.sort_values("Local Time", ascending=True, na_position="first").reset_index(drop=True)
-
 # ── Header ─────────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([1, 5])
 with h1:
     st.markdown("<span style='font-size:2rem;font-weight:700;color:#ff6b35'>G<span style='color:#1e3a5f'>track</span></span>", unsafe_allow_html=True)
 with h2:
     st.markdown("**GPS Tracking Dashboard** — Trisatria Persada Borneo")
-    mode_label = "Google Drive" if USE_GDRIVE else "Upload Manual"
-    n_files    = len(source_labels) if USE_GDRIVE else len(st.session_state.manual_dfs)
-    st.caption(f"Sumber data: {mode_label} · {n_files} file · {datetime.now().strftime('%d %B %Y %H:%M')}")
-
-if source_labels:
-    with st.expander(f"📂 File yang dimuat ({len(source_labels)} file)", expanded=False):
-        for lbl in source_labels:
-            st.caption(f"• {lbl}")
+    st.caption(f"Data diperbarui: {datetime.now().strftime('%d %B %Y %H:%M')}")
 
 st.divider()
+
+if uploaded is None:
+    st.info("⬅ Upload file Group Project (.xlsx) di sidebar untuk memulai.")
+    st.stop()
+
+# ── Load & proses data ─────────────────────────────────────────────────────────
+df    = load_excel(uploaded)
+bd_df = load_breakdown()
+bd_ids = set(bd_df["unit_id"].astype(str).tolist())
+
+df["_breakdown"]      = df["Unit ID"].isin(bd_ids)
+df["_display_status"] = df.apply(
+    lambda r: "Breakdown" if r["_breakdown"] else str(r.get("Vehicle Status", "") or ""), axis=1
+)
+
+# Kolom jumlah hari sejak last update
+now = pd.Timestamp.now()
+df["_days_no_update"] = df["Local Time"].apply(
+    lambda t: int((now - t).days) if pd.notna(t) else None
+)
+
+# Urutkan dari Local Time terlama ke terbaru
+df = df.sort_values("Local Time", ascending=True, na_position="first").reset_index(drop=True)
 
 # ── KPI ────────────────────────────────────────────────────────────────────────
 total       = len(df)
@@ -389,11 +273,11 @@ if st.session_state.modal_unit is not None:
                     st.rerun()
 
 # ── Header tabel ───────────────────────────────────────────────────────────────
-# Fleet(2.5) | UnitID(1.6) | Code(2) | Time(1.8) | Days(1.2) | Resource(1.8) | Status(1.3) | File(1.4) | Aksi(1.3)
-COL_W = [2.5, 1.6, 2, 1.8, 1.2, 1.8, 1.3, 1.4, 1.3]
+# Fleet(2.5) | UnitID(1.6) | Code(2) | Time(1.8) | Hari(1.1) | Resource(1.8) | Status(1.3) | Aksi(1.3)
+COL_W = [2.5, 1.6, 2, 1.8, 1.1, 1.8, 1.3, 1.3]
 
 hcols = st.columns(COL_W)
-for hc, label in zip(hcols, ["Fleet Group", "Unit ID", "Vehicle Code", "Local Time", "Hari", "Resource", "Status", "File Sumber", "Aksi"]):
+for hc, label in zip(hcols, ["Fleet Group", "Unit ID", "Vehicle Code", "Local Time", "Hari", "Resource", "Status", "Aksi"]):
     hc.markdown(f"<div class='cell-hdr'>{label}</div>", unsafe_allow_html=True)
 
 BADGE = {
@@ -415,13 +299,11 @@ for idx, row in page_df.iterrows():
     res    = str(row.get("Resource", "") or "")
     status = str(row["_display_status"])
     is_bd  = bool(row["_breakdown"])
-    src    = str(row.get("_source_file", "-"))
     badge  = BADGE.get(status, "badge-stop")
-    src_short = src.replace(".xlsx", "").replace(".xls", "")[:18]
 
-    # Kolom hari no update
+    # Badge warna kolom Hari
     days_val = row.get("_days_no_update")
-    if days_val is None or pd.isna(days_val):
+    if days_val is None or (isinstance(days_val, float) and pd.isna(days_val)):
         days_html = "<span style='color:#9ca3af'>-</span>"
     elif days_val == 0:
         days_html = "<span style='background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:4px;font-size:11px'>Hari ini</span>"
@@ -440,12 +322,11 @@ for idx, row in page_df.iterrows():
     rcols[4].markdown(f"<div class='cell'>{days_html}</div>",                        unsafe_allow_html=True)
     rcols[5].markdown(f"<div class='cell' title='{res}'>{res}</div>",               unsafe_allow_html=True)
     rcols[6].markdown(f"<div class='cell'><span class='{badge}'>{status}</span></div>", unsafe_allow_html=True)
-    rcols[7].markdown(f"<div class='cell'><span class='src-chip' title='{src}'>{src_short}</span></div>", unsafe_allow_html=True)
 
-    with rcols[8]:
-        label    = "⚠ Edit BD" if is_bd else "+ Breakdown"
-        btn_type = "primary" if is_bd else "secondary"
-        if st.button(label, key=f"bd_{uid}_{idx}", type=btn_type, use_container_width=True):
+    with rcols[7]:
+        btn_label = "⚠ Edit BD" if is_bd else "+ Breakdown"
+        btn_type  = "primary" if is_bd else "secondary"
+        if st.button(btn_label, key=f"bd_{uid}_{idx}", type=btn_type, use_container_width=True):
             st.session_state.modal_unit = {"unit_id": uid, "fleet": fleet, "code": code}
             st.rerun()
 
