@@ -121,7 +121,7 @@ st.markdown("""
     [data-testid="stBaseButton-secondary"],
 [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
     [data-testid="stBaseButton-primary"] {
-    height:30px !important; padding:0 10px !important; font-size:12px !important; margin-top:2px;
+    height:30px !important; padding:0 10px !important; font-size:10px !important; margin-top:2px;
 }
 </style>
 """, unsafe_allow_html=True)
