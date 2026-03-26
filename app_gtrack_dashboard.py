@@ -301,7 +301,7 @@ if st.session_state.modal_unit is not None:
 
 # ── Header tabel ───────────────────────────────────────────────────────────────
 # Fleet(2.5) | UnitID(1.6) | Code(2) | Time(1.8) | Hari(1.1) | Resource(1.8) | Status(1.3) | Aksi(1.3)
-COL_W = [2.5, 1.6, 2, 1.8, 1.1, 1.8, 1.3, 1.3]
+COL_W = [2.5, 1.6, 2, 1.8, 1.1, 1.8, 1.3, 1.6]
 
 hcols = st.columns(COL_W)
 for hc, label in zip(hcols, ["Fleet Group", "Unit ID", "Vehicle Code", "Local Time", "Hari", "Resource", "Status", "Aksi"]):
