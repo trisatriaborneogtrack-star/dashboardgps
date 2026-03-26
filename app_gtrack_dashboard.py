@@ -1,6 +1,6 @@
 """
 GPS Tracking Dashboard - Trisatria Persada Borneo
-Streamlit + SQLite | Breakdown Status Persistent
+Multi-koordinator | Google Drive + Manual Upload | SQLite Breakdown
 """
 
 import streamlit as st
@@ -8,6 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import sqlite3
 import os
+import io
+import json
 from datetime import datetime
 
 st.set_page_config(
@@ -17,7 +19,77 @@ st.set_page_config(
 )
 
 DB_PATH = "breakdown_status.db"
-os.makedirs("uploads", exist_ok=True)
+
+# ── Cek apakah Google Drive tersedia ──────────────────────────────────────────
+def gdrive_available():
+    try:
+        from googleapiclient.discovery import build
+        from google.oauth2 import service_account
+        creds_raw = st.secrets.get("GDRIVE_CREDENTIALS", None)
+        folder_id = st.secrets.get("GDRIVE_FOLDER_ID", None)
+        return bool(creds_raw and folder_id)
+    except Exception:
+        return False
+
+# ── Google Drive: baca semua .xlsx dari folder ────────────────────────────────
+@st.cache_data(ttl=300)  # cache 5 menit, refresh otomatis
+def load_from_gdrive():
+    from googleapiclient.discovery import build
+    from google.oauth2 import service_account
+    import googleapiclient.http
+
+    creds_raw  = st.secrets["GDRIVE_CREDENTIALS"]
+    folder_id  = st.secrets["GDRIVE_FOLDER_ID"]
+    creds_info = json.loads(creds_raw) if isinstance(creds_raw, str) else dict(creds_raw)
+
+    creds   = service_account.Credentials.from_service_account_info(
+        creds_info,
+        scopes=["https://www.googleapis.com/auth/drive.readonly"]
+    )
+    service = build("drive", "v3", credentials=creds)
+
+    # Cari semua file .xlsx di folder
+    results = service.files().list(
+        q=f"'{folder_id}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false",
+        fields="files(id, name, modifiedTime)",
+        orderBy="modifiedTime desc"
+    ).execute()
+
+    files = results.get("files", [])
+    if not files:
+        return pd.DataFrame(), []
+
+    dfs    = []
+    labels = []
+    for f in files:
+        request  = service.files().get_media(fileId=f["id"])
+        fh       = io.BytesIO()
+        downloader = googleapiclient.http.MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+        try:
+            df = _parse_excel(fh)
+            df["_source_file"] = f["name"]
+            dfs.append(df)
+            labels.append(f"{f['name']} ({f['modifiedTime'][:10]})")
+        except Exception:
+            pass
+
+    if dfs:
+        return pd.concat(dfs, ignore_index=True), labels
+    return pd.DataFrame(), []
+
+# ── Parse satu file Excel ──────────────────────────────────────────────────────
+def _parse_excel(file_obj):
+    df = pd.read_excel(file_obj)
+    df.columns = df.columns.str.strip()
+    if "Unit ID" in df.columns:
+        df["Unit ID"] = df["Unit ID"].astype(str).str.replace(".0", "", regex=False).str.strip()
+    if "Local Time" in df.columns:
+        df["Local Time"] = pd.to_datetime(df["Local Time"], errors="coerce")
+    return df
 
 # ── SQLite ─────────────────────────────────────────────────────────────────────
 def get_conn():
@@ -61,29 +133,85 @@ def delete_breakdown(unit_id):
     conn.commit()
     conn.close()
 
-# ── Load Excel ─────────────────────────────────────────────────────────────────
-@st.cache_data
-def load_excel(file_bytes):
-    df = pd.read_excel(file_bytes)
-    df.columns = df.columns.str.strip()
-    df["Unit ID"] = df["Unit ID"].astype(str).str.replace(".0", "", regex=False).str.strip()
-    df["Local Time"] = pd.to_datetime(df["Local Time"], errors="coerce")
-    return df
-
 # ── Session state ──────────────────────────────────────────────────────────────
-for key, default in [("modal_unit", None), ("page_num", 1)]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+for k, v in [("modal_unit", None), ("page_num", 1), ("manual_dfs", {})]:
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ── CSS ────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+.big-metric   { font-size:2.2rem; font-weight:700; line-height:1; }
+.metric-label { font-size:0.78rem; color:#888; margin-top:2px; }
+.cell     { padding:6px 8px; font-size:12px; border-bottom:1px solid rgba(128,128,128,0.12);
+            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.6; }
+.cell-hdr { padding:6px 8px; font-size:11px; font-weight:600; color:#6b7280;
+            border-bottom:2px solid rgba(128,128,128,0.2);
+            background:rgba(128,128,128,0.05); }
+.badge-tracking  { background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-stop      { background:#f3f4f6;color:#374151;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-lost      { background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-breakdown { background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.bd-note  { font-size:11px;color:#92400e;background:#fffbeb;padding:3px 10px;border-left:3px solid #fcd34d; }
+.src-chip { background:#e0f2fe;color:#0369a1;padding:1px 6px;border-radius:3px;font-size:10px; }
+[data-testid="stHorizontalBlock"] { gap:0 !important; align-items:center !important; }
+[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
+    [data-testid="stBaseButton-secondary"],
+[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
+    [data-testid="stBaseButton-primary"] {
+    height:30px !important; padding:0 10px !important; font-size:12px !important; margin-top:2px;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
+USE_GDRIVE = gdrive_available()
+
 with st.sidebar:
-    st.markdown("### 📁 Upload Group Project")
-    uploaded = st.file_uploader("Upload file .xlsx", type=["xlsx"])
-    st.caption("Upload tiap pagi. Status Breakdown tidak akan terhapus.")
+    st.markdown("<span style='font-size:1.6rem;font-weight:700;color:#ff6b35'>G<span style='color:#1e3a5f'>track</span></span>", unsafe_allow_html=True)
+    st.caption("Trisatria Persada Borneo")
+    st.divider()
+
+    if USE_GDRIVE:
+        st.success("Google Drive terhubung", icon="✅")
+        st.caption("File dibaca otomatis dari folder Drive.")
+        if st.button("🔄 Refresh data Drive", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    else:
+        st.warning("Mode upload manual", icon="📁")
+        st.caption("Google Drive belum dikonfigurasi. Setiap koordinator upload file fleet-nya di sini.")
+        uploaded_files = st.file_uploader(
+            "Upload file .xlsx (bisa lebih dari satu)",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            help="Setiap koordinator upload file fleet group masing-masing"
+        )
+        if uploaded_files:
+            for uf in uploaded_files:
+                if uf.name not in st.session_state.manual_dfs:
+                    try:
+                        df_tmp = _parse_excel(uf)
+                        df_tmp["_source_file"] = uf.name
+                        st.session_state.manual_dfs[uf.name] = df_tmp
+                    except Exception as e:
+                        st.error(f"Gagal baca {uf.name}: {e}")
+
+        if st.session_state.manual_dfs:
+            st.markdown(f"**{len(st.session_state.manual_dfs)} file dimuat:**")
+            for fname in list(st.session_state.manual_dfs.keys()):
+                col_f, col_x = st.columns([4, 1])
+                col_f.caption(f"📄 {fname}")
+                if col_x.button("✕", key=f"rm_{fname}"):
+                    del st.session_state.manual_dfs[fname]
+                    st.rerun()
+
     st.divider()
     st.markdown("### 🔍 Filter")
     filter_status = st.selectbox("Status", ["Semua", "Tracking", "Stop", "GPRS Lost", "Breakdown"])
-    search_text = st.text_input("Cari kode / unit ID / fleet")
+    filter_fleet  = st.selectbox("Fleet Group", ["Semua"])
+    search_text   = st.text_input("Cari kode / unit ID / fleet")
+
     st.divider()
     bd_sidebar = load_breakdown()
     st.metric("Breakdown aktif", len(bd_sidebar))
@@ -92,57 +220,40 @@ with st.sidebar:
             c = get_conn(); c.execute("DELETE FROM breakdown"); c.commit(); c.close()
             st.rerun()
 
-# ── CSS ────────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-.big-metric  { font-size:2.2rem; font-weight:700; line-height:1; }
-.metric-label{ font-size:0.78rem; color:#888; margin-top:2px; }
+# ── Ambil data ─────────────────────────────────────────────────────────────────
+source_labels = []
 
-/* Hapus gap default antar st.columns agar baris tabel rapat */
-[data-testid="stHorizontalBlock"] {
-    gap: 0 !important;
-    align-items: center !important;
-}
-/* Setiap sel tabel */
-.cell {
-    padding: 6px 8px;
-    font-size: 12px;
-    border-bottom: 1px solid rgba(128,128,128,0.15);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1.6;
-}
-.cell-hdr {
-    padding: 6px 8px;
-    font-size: 11px;
-    font-weight: 600;
-    color: #6b7280;
-    border-bottom: 2px solid rgba(128,128,128,0.25);
-    background: rgba(128,128,128,0.05);
-}
-.badge-tracking  { background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
-.badge-stop      { background:#f3f4f6;color:#374151;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
-.badge-lost      { background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
-.badge-breakdown { background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
-.bd-note { font-size:11px;color:#92400e;background:#fffbeb;padding:3px 10px;border-left:3px solid #fcd34d; }
+if USE_GDRIVE:
+    with st.spinner("Membaca file dari Google Drive..."):
+        df, source_labels = load_from_gdrive()
+    if df.empty:
+        st.warning("Tidak ada file .xlsx di folder Google Drive. Pastikan koordinator sudah upload.")
+        st.stop()
+else:
+    if not st.session_state.manual_dfs:
+        st.info("⬅ Upload file .xlsx fleet group di sidebar. Setiap koordinator upload file masing-masing.")
+        st.stop()
+    df = pd.concat(list(st.session_state.manual_dfs.values()), ignore_index=True)
 
-/* Paksa tombol di kolom terakhir agar vertikal tengah & compact */
-[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
-    [data-testid="stBaseButton-secondary"],
-[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
-    [data-testid="stBaseButton-primary"] {
-    height: 30px !important;
-    padding: 0 10px !important;
-    font-size: 12px !important;
-    margin-top: 2px;
-}
-/* Hilangkan margin bawah tombol agar tidak menambah tinggi baris */
-[data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child div[data-testid="element-container"] {
-    margin-bottom: 0 !important;
-}
-</style>
-""", unsafe_allow_html=True)
+# ── Merge breakdown ────────────────────────────────────────────────────────────
+bd_df  = load_breakdown()
+bd_ids = set(bd_df["unit_id"].astype(str).tolist())
+
+df["_breakdown"]      = df["Unit ID"].isin(bd_ids)
+df["_display_status"] = df.apply(
+    lambda r: "Breakdown" if r["_breakdown"] else str(r.get("Vehicle Status", "") or ""), axis=1
+)
+if "_source_file" not in df.columns:
+    df["_source_file"] = "-"
+
+# Hitung selisih hari dari Local Time ke hari ini
+now = pd.Timestamp.now()
+df["_days_no_update"] = df["Local Time"].apply(
+    lambda t: int((now - t).days) if pd.notna(t) else None
+)
+
+# Urutkan dari Local Time terlama (terbesar selisih harinya) ke terbaru
+df = df.sort_values("Local Time", ascending=True, na_position="first").reset_index(drop=True)
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([1, 5])
@@ -150,23 +261,16 @@ with h1:
     st.markdown("<span style='font-size:2rem;font-weight:700;color:#ff6b35'>G<span style='color:#1e3a5f'>track</span></span>", unsafe_allow_html=True)
 with h2:
     st.markdown("**GPS Tracking Dashboard** — Trisatria Persada Borneo")
-    st.caption(f"Data diperbarui: {datetime.now().strftime('%d %B %Y %H:%M')}")
+    mode_label = "Google Drive" if USE_GDRIVE else "Upload Manual"
+    n_files    = len(source_labels) if USE_GDRIVE else len(st.session_state.manual_dfs)
+    st.caption(f"Sumber data: {mode_label} · {n_files} file · {datetime.now().strftime('%d %B %Y %H:%M')}")
+
+if source_labels:
+    with st.expander(f"📂 File yang dimuat ({len(source_labels)} file)", expanded=False):
+        for lbl in source_labels:
+            st.caption(f"• {lbl}")
 
 st.divider()
-
-if uploaded is None:
-    st.info("⬅ Upload file Group Project (.xlsx) di sidebar untuk memulai.")
-    st.stop()
-
-# ── Load & merge ───────────────────────────────────────────────────────────────
-df    = load_excel(uploaded)
-bd_df = load_breakdown()
-bd_ids = set(bd_df["unit_id"].astype(str).tolist())
-
-df["_breakdown"]      = df["Unit ID"].isin(bd_ids)
-df["_display_status"] = df.apply(
-    lambda r: "Breakdown" if r["_breakdown"] else str(r.get("Vehicle Status", "") or ""), axis=1
-)
 
 # ── KPI ────────────────────────────────────────────────────────────────────────
 total       = len(df)
@@ -221,10 +325,12 @@ with cb:
                                yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig_bar, use_container_width=True)
 
-# ── Filter & pagination ────────────────────────────────────────────────────────
+# ── Filter ─────────────────────────────────────────────────────────────────────
 fdf = df.copy()
 if filter_status != "Semua":
     fdf = fdf[fdf["_display_status"] == filter_status]
+if filter_fleet != "Semua":
+    fdf = fdf[fdf["Fleet Group"] == filter_fleet]
 if search_text:
     q = search_text.lower()
     fdf = fdf[
@@ -234,6 +340,7 @@ if search_text:
     ]
 fdf = fdf.reset_index(drop=True)
 
+# ── Pagination ──────────────────────────────────────────────────────────────────
 PER_PAGE    = 25
 total_rows  = len(fdf)
 total_pages = max(1, (total_rows + PER_PAGE - 1) // PER_PAGE)
@@ -243,7 +350,7 @@ if st.session_state.page_num > total_pages:
 st.divider()
 st.markdown(f"#### Daftar Unit &nbsp;<span style='font-size:13px;color:#9ca3af'>{total_rows} unit ditampilkan</span>", unsafe_allow_html=True)
 
-# ── Modal breakdown (muncul di atas tabel) ─────────────────────────────────────
+# ── Modal breakdown ─────────────────────────────────────────────────────────────
 if st.session_state.modal_unit is not None:
     mu        = st.session_state.modal_unit
     is_active = mu["unit_id"] in bd_ids
@@ -281,13 +388,12 @@ if st.session_state.modal_unit is not None:
                     st.session_state.modal_unit = None
                     st.rerun()
 
-# ── Kolom lebar (proporsi) ─────────────────────────────────────────────────────
-# Fleet(3) | UnitID(2) | Code(2) | Time(2) | Resource(2) | Status(1.5) | Aksi(1.5)
-COL_W = [3, 2, 2, 2, 2, 1.5, 1.5]
+# ── Header tabel ───────────────────────────────────────────────────────────────
+# Fleet(2.5) | UnitID(1.6) | Code(2) | Time(1.8) | Days(1.2) | Resource(1.8) | Status(1.3) | File(1.4) | Aksi(1.3)
+COL_W = [2.5, 1.6, 2, 1.8, 1.2, 1.8, 1.3, 1.4, 1.3]
 
-# Header tabel
 hcols = st.columns(COL_W)
-for hc, label in zip(hcols, ["Fleet Group", "Unit ID", "Vehicle Code", "Local Time", "Resource", "Status", "Aksi"]):
+for hc, label in zip(hcols, ["Fleet Group", "Unit ID", "Vehicle Code", "Local Time", "Hari", "Resource", "Status", "File Sumber", "Aksi"]):
     hc.markdown(f"<div class='cell-hdr'>{label}</div>", unsafe_allow_html=True)
 
 BADGE = {
@@ -305,42 +411,56 @@ for idx, row in page_df.iterrows():
     uid    = str(row["Unit ID"])
     fleet  = str(row.get("Fleet Group", "") or "")
     code   = str(row.get("Vehicle Code", "") or "")
-    ttime  = row["Local Time"].strftime("%Y-%m-%d %H:%M") if pd.notna(row["Local Time"]) else "-"
+    ttime  = row["Local Time"].strftime("%Y-%m-%d %H:%M") if pd.notna(row.get("Local Time")) else "-"
     res    = str(row.get("Resource", "") or "")
     status = str(row["_display_status"])
     is_bd  = bool(row["_breakdown"])
+    src    = str(row.get("_source_file", "-"))
     badge  = BADGE.get(status, "badge-stop")
+    src_short = src.replace(".xlsx", "").replace(".xls", "")[:18]
+
+    # Kolom hari no update
+    days_val = row.get("_days_no_update")
+    if days_val is None or pd.isna(days_val):
+        days_html = "<span style='color:#9ca3af'>-</span>"
+    elif days_val == 0:
+        days_html = "<span style='background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:4px;font-size:11px'>Hari ini</span>"
+    elif days_val <= 3:
+        days_html = f"<span style='background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;font-size:11px'>{days_val}h</span>"
+    elif days_val <= 7:
+        days_html = f"<span style='background:#fee2e2;color:#991b1b;padding:1px 6px;border-radius:4px;font-size:11px'>{days_val}h</span>"
+    else:
+        days_html = f"<span style='background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600'>{days_val}h</span>"
 
     rcols = st.columns(COL_W)
-    rcols[0].markdown(f"<div class='cell' title='{fleet}'>{fleet}</div>",       unsafe_allow_html=True)
+    rcols[0].markdown(f"<div class='cell' title='{fleet}'>{fleet}</div>",           unsafe_allow_html=True)
     rcols[1].markdown(f"<div class='cell' style='font-family:monospace;font-size:11px'>{uid}</div>", unsafe_allow_html=True)
-    rcols[2].markdown(f"<div class='cell' title='{code}'>{code}</div>",         unsafe_allow_html=True)
-    rcols[3].markdown(f"<div class='cell'>{ttime}</div>",                        unsafe_allow_html=True)
-    rcols[4].markdown(f"<div class='cell' title='{res}'>{res}</div>",            unsafe_allow_html=True)
-    rcols[5].markdown(f"<div class='cell'><span class='{badge}'>{status}</span></div>", unsafe_allow_html=True)
+    rcols[2].markdown(f"<div class='cell' title='{code}'>{code}</div>",             unsafe_allow_html=True)
+    rcols[3].markdown(f"<div class='cell'>{ttime}</div>",                            unsafe_allow_html=True)
+    rcols[4].markdown(f"<div class='cell'>{days_html}</div>",                        unsafe_allow_html=True)
+    rcols[5].markdown(f"<div class='cell' title='{res}'>{res}</div>",               unsafe_allow_html=True)
+    rcols[6].markdown(f"<div class='cell'><span class='{badge}'>{status}</span></div>", unsafe_allow_html=True)
+    rcols[7].markdown(f"<div class='cell'><span class='src-chip' title='{src}'>{src_short}</span></div>", unsafe_allow_html=True)
 
-    # Tombol di kolom terakhir — sejajar dengan baris
-    with rcols[6]:
-        if is_bd:
-            if st.button("⚠ Edit BD", key=f"bd_{uid}_{idx}", type="primary", use_container_width=True):
-                st.session_state.modal_unit = {"unit_id": uid, "fleet": fleet, "code": code}
-                st.rerun()
-        else:
-            if st.button("+ Breakdown", key=f"bd_{uid}_{idx}", use_container_width=True):
-                st.session_state.modal_unit = {"unit_id": uid, "fleet": fleet, "code": code}
-                st.rerun()
+    with rcols[8]:
+        label    = "⚠ Edit BD" if is_bd else "+ Breakdown"
+        btn_type = "primary" if is_bd else "secondary"
+        if st.button(label, key=f"bd_{uid}_{idx}", type=btn_type, use_container_width=True):
+            st.session_state.modal_unit = {"unit_id": uid, "fleet": fleet, "code": code}
+            st.rerun()
 
-    # Catatan breakdown (muncul di baris ekstra di bawah jika aktif)
     if is_bd:
         bd_info = bd_df[bd_df["unit_id"] == uid]
         if not bd_info.empty:
-            bdi = bd_info.iloc[0]
+            bdi   = bd_info.iloc[0]
             parts = []
             if bdi["catatan"]: parts.append(f"📝 {bdi['catatan']}")
             if bdi["teknisi"]:  parts.append(f"👤 {bdi['teknisi']}")
             if parts:
-                st.markdown(f"<div class='bd-note'>{' &nbsp;·&nbsp; '.join(parts)}</div>",
-                            unsafe_allow_html=True)
+                st.markdown(
+                    f"<div class='bd-note'>{' &nbsp;·&nbsp; '.join(parts)}</div>",
+                    unsafe_allow_html=True
+                )
 
 # ── Pagination ─────────────────────────────────────────────────────────────────
 st.markdown("")
@@ -378,4 +498,4 @@ else:
                 st.rerun()
 
 st.divider()
-st.caption(f"GPS Tracking Dashboard · Trisatria Persada Borneo · Powered by Streamlit + SQLite · {datetime.now().year}")
+st.caption(f"GPS Tracking Dashboard · Trisatria Persada Borneo · {datetime.now().year}")
