@@ -60,13 +60,40 @@ def delete_breakdown(unit_id):
     conn.commit()
     conn.close()
 
-# ── Load Excel ─────────────────────────────────────────────────────────────────
+# Load Excel
+COL_MAP = {
+    "Grup Fleet":       "Fleet Group",
+    "Kode Kendaraan":   "Vehicle Code",
+    "Status Kendaraan": "Vehicle Status",
+    "Waktu lokal":      "Local Time",
+    "Sumber daya":      "Resource",
+}
+
 @st.cache_data
 def load_excel(file_bytes):
-    df = pd.read_excel(file_bytes)
+    df = pd.read_excel(file_bytes, header=0)
     df.columns = df.columns.str.strip()
-    df["Unit ID"] = df["Unit ID"].astype(str).str.replace(".0", "", regex=False).str.strip()
-    df["Local Time"] = pd.to_datetime(df["Local Time"], errors="coerce")
+    # Jika kolom utama tidak ditemukan, header ada di baris ke-2
+    if "Unit ID" not in df.columns and "Fleet Group" not in df.columns and "Grup Fleet" not in df.columns:
+        df = pd.read_excel(file_bytes, header=1)
+        df.columns = df.columns.str.strip()
+    # Normalkan kolom Bahasa Indonesia ke Inggris
+    df = df.rename(columns=COL_MAP)
+    # Bersihkan Unit ID
+    if "Unit ID" in df.columns:
+        df["Unit ID"] = (
+            df["Unit ID"].astype(str)
+            .str.replace(".0", "", regex=False)
+            .str.replace("nan", "", regex=False)
+            .str.strip()
+        )
+    else:
+        df["Unit ID"] = ""
+    # Pastikan kolom wajib selalu ada
+    for col in ["Fleet Group", "Vehicle Code", "Vehicle Status", "Resource"]:
+        if col not in df.columns:
+            df[col] = ""
+    df["Local Time"] = pd.to_datetime(df.get("Local Time"), errors="coerce")
     return df
 
 # ── Session state ──────────────────────────────────────────────────────────────
