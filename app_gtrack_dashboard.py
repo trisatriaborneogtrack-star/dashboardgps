@@ -67,6 +67,7 @@ COL_MAP = {
     "Status Kendaraan": "Vehicle Status",
     "Waktu lokal":      "Local Time",
     "Sumber daya":      "Resource",
+    "Kecepatan":        "Speed",
 }
 
 @st.cache_data
@@ -90,7 +91,7 @@ def load_excel(file_bytes):
     else:
         df["Unit ID"] = ""
     # Pastikan kolom wajib selalu ada
-    for col in ["Fleet Group", "Vehicle Code", "Vehicle Status", "Resource"]:
+    for col in ["Fleet Group", "Vehicle Code", "Vehicle Status", "Resource", "Speed", "ACC"]:
         if col not in df.columns:
             df[col] = ""
     df["Local Time"] = pd.to_datetime(df.get("Local Time"), errors="coerce")
@@ -116,12 +117,16 @@ st.markdown("""
 .badge-lost      { background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
 .badge-breakdown { background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
 .bd-note  { font-size:11px;color:#92400e;background:#fffbeb;padding:3px 10px;border-left:3px solid #fcd34d; }
+.badge-update   { background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-power    { background:#fde8d8;color:#7c2d12;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-antenna  { background:#ede9fe;color:#4c1d95;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-acc      { background:#fef9c3;color:#713f12;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
 [data-testid="stHorizontalBlock"] { gap:0 !important; align-items:center !important; }
 [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
     [data-testid="stBaseButton-secondary"],
 [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
     [data-testid="stBaseButton-primary"] {
-    height:30px !important; padding:0 10px !important; font-size:10px !important; margin-top:2px;
+    height:30px !important; padding:0 10px !important; font-size:12px !important; margin-top:2px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -138,13 +143,19 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 🔍 Filter")
-    filter_status = st.selectbox("Status", ["Semua", "Tracking", "Stop", "GPRS Lost", "Breakdown"])
-    filter_fleet  = st.selectbox("Fleet Group", ["Semua"])
+    filter_status = st.selectbox("Status", [
+        "Semua", "Update", "No Update", "Breakdown",
+        "Indikasi kabel power GPS lepas/kendor",
+        "Indikasi antena GPS lepas/kendor",
+        "Indikasi ACC bermasalah",
+    ])
+    fleet_options = ["Semua"] + sorted(st.session_state.get("fleet_list", []))
+    filter_fleet  = st.selectbox("Fleet Group", fleet_options)
     search_text   = st.text_input("Cari kode / unit ID / fleet")
 
     st.divider()
     bd_sidebar = load_breakdown()
-    st.metric("Breakdown", len(bd_sidebar))
+    st.metric("Breakdown aktif", len(bd_sidebar))
     if not bd_sidebar.empty:
         if st.button("🗑 Reset semua breakdown", type="secondary"):
             c = get_conn(); c.execute("DELETE FROM breakdown"); c.commit(); c.close()
@@ -169,19 +180,41 @@ df    = load_excel(uploaded)
 bd_df = load_breakdown()
 bd_ids = set(bd_df["unit_id"].astype(str).tolist())
 
-df["_breakdown"]      = df["Unit ID"].isin(bd_ids)
-df["_display_status"] = df.apply(
-    lambda r: "Breakdown" if r["_breakdown"] else str(r.get("Vehicle Status", "") or ""), axis=1
-)
+df["_breakdown"] = df["Unit ID"].isin(bd_ids)
 
-# Kolom jumlah hari sejak last update
+# Hitung hari no update DULU sebelum compute_status memakainya
 now = pd.Timestamp.now()
 df["_days_no_update"] = df["Local Time"].apply(
     lambda t: int((now - t).days) if pd.notna(t) else None
 )
 
+def compute_status(r):
+    if r["_breakdown"]:
+        return "Breakdown"
+    days = r.get("_days_no_update")
+    if days is not None and not (isinstance(days, float) and pd.isna(days)) and days > 0:
+        return "No Update"
+    resource = str(r.get("Resource", "") or "")
+    acc      = str(r.get("ACC", "") or "")
+    speed    = r.get("Speed", 0) or 0
+    if resource in ("Main Power Remove", "Backup Battery Low", "Main Power Low"):
+        return "Indikasi kabel power GPS lepas/kendor"
+    if resource in ("GPS Antenna Disconnect", "GPS Antenna Re Connect"):
+        return "Indikasi antena GPS lepas/kendor"
+    if acc == "OFF" and float(speed) > 10:
+        return "Indikasi ACC bermasalah"
+    return "Update"
+
+df["_display_status"] = df.apply(compute_status, axis=1)
+
 # Urutkan dari Local Time terlama ke terbaru
 df = df.sort_values("Local Time", ascending=True, na_position="first").reset_index(drop=True)
+
+# Simpan daftar fleet ke session_state agar bisa dipakai sidebar
+fleet_list = sorted(df["Fleet Group"].dropna().unique().tolist())
+if st.session_state.get("fleet_list") != fleet_list:
+    st.session_state["fleet_list"] = fleet_list
+    st.rerun()
 
 # ── KPI ────────────────────────────────────────────────────────────────────────
 total       = len(df)
@@ -301,17 +334,19 @@ if st.session_state.modal_unit is not None:
 
 # ── Header tabel ───────────────────────────────────────────────────────────────
 # Fleet(2.5) | UnitID(1.6) | Code(2) | Time(1.8) | Hari(1.1) | Resource(1.8) | Status(1.3) | Aksi(1.3)
-COL_W = [2.5, 1.6, 2, 1.8, 1.1, 1.8, 1.3, 1.6]
+COL_W = [2.5, 1.6, 2, 1.8, 1.1, 1.8, 1.3, 1.3]
 
 hcols = st.columns(COL_W)
 for hc, label in zip(hcols, ["Fleet Group", "Unit ID", "Vehicle Code", "Local Time", "Hari", "Resource", "Status", "Aksi"]):
     hc.markdown(f"<div class='cell-hdr'>{label}</div>", unsafe_allow_html=True)
 
 BADGE = {
-    "Tracking":  "badge-tracking",
-    "Stop":      "badge-stop",
-    "GPRS Lost": "badge-lost",
-    "Breakdown": "badge-breakdown",
+    "Update":                                  "badge-update",
+    "No Update":                               "badge-lost",
+    "Breakdown":                               "badge-breakdown",
+    "Indikasi kabel power GPS lepas/kendor":   "badge-power",
+    "Indikasi antena GPS lepas/kendor":        "badge-antenna",
+    "Indikasi ACC bermasalah":                 "badge-acc",
 }
 
 # ── Render baris ───────────────────────────────────────────────────────────────
