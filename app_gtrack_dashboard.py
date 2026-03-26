@@ -121,6 +121,7 @@ st.markdown("""
 .badge-power    { background:#fde8d8;color:#7c2d12;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
 .badge-antenna  { background:#ede9fe;color:#4c1d95;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
 .badge-acc      { background:#fef9c3;color:#713f12;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500; }
+.badge-uninstall{ background:#f3f4f6;color:#6b7280;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500;font-style:italic; }
 [data-testid="stHorizontalBlock"] { gap:0 !important; align-items:center !important; }
 [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child
     [data-testid="stBaseButton-secondary"],
@@ -148,6 +149,7 @@ with st.sidebar:
         "Indikasi kabel power GPS lepas/kendor",
         "Indikasi antena GPS lepas/kendor",
         "Indikasi ACC bermasalah",
+        "Belum diinstal",
     ])
     fleet_options = ["Semua"] + sorted(st.session_state.get("fleet_list", []))
     filter_fleet  = st.selectbox("Fleet Group", fleet_options)
@@ -191,6 +193,8 @@ df["_days_no_update"] = df["Local Time"].apply(
 def compute_status(r):
     if r["_breakdown"]:
         return "Breakdown"
+    if pd.isna(r.get("Local Time")):
+        return "Belum diinstal"
     days = r.get("_days_no_update")
     if days is not None and not (isinstance(days, float) and pd.isna(days)) and days > 0:
         return "No Update"
@@ -347,6 +351,7 @@ BADGE = {
     "Indikasi kabel power GPS lepas/kendor":   "badge-power",
     "Indikasi antena GPS lepas/kendor":        "badge-antenna",
     "Indikasi ACC bermasalah":                 "badge-acc",
+    "Belum diinstal":                          "badge-uninstall",
 }
 
 # ── Render baris ───────────────────────────────────────────────────────────────
@@ -386,7 +391,7 @@ for idx, row in page_df.iterrows():
     rcols[6].markdown(f"<div class='cell'><span class='{badge}'>{status}</span></div>", unsafe_allow_html=True)
 
     with rcols[7]:
-        btn_label = "⚠ Edit BD" if is_bd else "+ Breakdown"
+        btn_label = "⚠ Edit" if is_bd else "+ BD"
         btn_type  = "primary" if is_bd else "secondary"
         if st.button(btn_label, key=f"bd_{uid}_{idx}", type=btn_type, use_container_width=True):
             st.session_state.modal_unit = {"unit_id": uid, "fleet": fleet, "code": code}
