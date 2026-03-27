@@ -270,7 +270,7 @@ for col, label, val, color in [
     (kcols[1], "No Update",     no_update,  "#ef4444"),
     (kcols[2], "Update",        tracking,   "#10b981"),
     (kcols[3], "Breakdown",     n_breakdown,"#f59e0b"),
-    (kcols[4], "Status Aktif",  n_aktif,    "#8b5cf6"),
+    (kcols[4], "Status Tidak Aktif",  n_aktif,    "#8b5cf6"),
 ]:
     with col:
         st.markdown(f"""
