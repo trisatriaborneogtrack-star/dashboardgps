@@ -172,7 +172,6 @@ with st.sidebar:
         "Indikasi kabel power GPS lepas/kendor",
         "Indikasi antena GPS lepas/kendor",
         "Indikasi ACC bermasalah",
-        "── Status Koordinator ──",
         "Breakdown", "Standby", "Sudah dismantle", "Plan dismantle", "Offhire",
     ])
     fleet_options = ["Semua"] + sorted(st.session_state.get("fleet_list", []))
@@ -181,7 +180,7 @@ with st.sidebar:
 
     st.divider()
     us_sidebar = load_unit_status()
-    st.metric("Status aktif", len(us_sidebar))
+    st.metric("Status Unit Tidak Aktif", len(us_sidebar))
     # Ringkasan per status
     if not us_sidebar.empty:
         counts = us_sidebar["status"].value_counts()
@@ -491,7 +490,7 @@ with pg3:
 
 # ── Daftar status aktif ────────────────────────────────────────────────────────
 st.divider()
-st.markdown("#### 📋 Daftar Status Unit Aktif")
+st.markdown("#### 📋 Daftar Status Unit Tidak Aktif")
 us_now = load_unit_status()
 if us_now.empty:
     st.info("Tidak ada unit dengan status aktif saat ini.")
